@@ -1,0 +1,493 @@
+---
+title: "Customer Churn Model"
+output: 
+  flexdashboard::flex_dashboard:
+    source_code: embed
+    social: ["twitter", "linkedin"]
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+# load libraries
+library("flexdashboard")
+library("here")
+library("tidyquant")
+library("tidyverse")
+library("caret")
+
+# load data
+org_subscription_events <- read_csv("data/org subscription events.csv")
+product_usage <- read_csv("data/product usage.csv")
+new_data <- readRDS("data/new_data.rds")
+corrr_analysis <- readRDS("data/corrr_analysis.rds")
+
+# load model
+super_model <- readRDS("models/fit_glm.rds")
+
+
+## new case
+new_case <- new_data %>% 
+  slice(1)
+```
+
+
+Sidebar {.sidebar}
+=====================================
+
+#### Model Inputs:
+
+```{r}
+# plan name
+selectInput(
+  inputId = 'plan_name',
+  label = "Plan Name:",
+  choices = unique(org_subscription_events$plan_name)
+)
+
+# Price (Arr Amount / Seats)
+sliderInput(
+  inputId = "price",
+  label = "Price per Seat:",
+  min = 60,
+  max = 200,
+  value = 120,
+  step = 1
+)
+
+# Usage Rate (Days with a Meeting / 30 days)
+sliderInput(
+  inputId = "usage_rate",
+  label = "Number of Days used in the first Month:",
+  min = 0,
+  max = 30,
+  value = 15,
+  step = 1
+)
+
+
+# days using product
+sliderInput(
+  "seats",
+  label = "Seats:",
+  min = 1,
+  max = 5,
+  value = 1,
+  step = 1
+)
+
+# Meetings per day (Total Meetings / Days)
+numericInput(
+  inputId = "avg_meetings",
+  label = "Meetings Per Day:",
+  min = 0,
+  max = 4,
+  value = 1.5,
+  step = 0.1
+)
+
+# Conference per day (Conference Meetings / Days)
+numericInput(
+  inputId = "avg_conf_meetings",
+  label = "Conference Meetings Per Day:",
+  min = 0,
+  max = 2,
+  value = 0.25,
+  step = 0.05
+)
+
+# Group Meetings per day (Group Meetings / Days)
+numericInput(
+  inputId = "group_meetings_ratio",
+  label = "Percentage of Group Meetings: (0-100)",
+  min = 0,
+  max = 100,
+  value = 3,
+  step = 1
+)
+```
+
+
+
+
+***
+
+<br>
+
+*Created by:*
+
+**Jason Lee - Manager, Data Science**
+
+![](images/calendly.png){width=64} [Calendly](https://calendly.com)
+
+
+
+Prediction Model {data-icon="fa-cogs"}
+===
+
+Row 
+-----------------------------------------------------------------------
+
+### Customer Value (annually) {.value-box}
+
+```{r}
+# Emit the download rate
+renderValueBox({
+  
+  # get new case to predict
+  new_case <- new_case %>%
+    mutate(
+      `plan_name_premium-monthly` = ifelse(input$plan_name == "premium-monthly", 1, 0),
+      `plan_name_premium-yearly` = ifelse(input$plan_name == "premium-yearly", 1, 0),
+      `plan_name_pro-monthly` = ifelse(input$plan_name == "pro-monthly", 1, 0),
+      `plan_name_pro-yearly` = ifelse(input$plan_name == "pro-yearly", 1, 0),
+      usage_rate = input$usage_rate / 30,
+      avg_meetings = input$avg_meetings,
+      avg_conf_meetings = input$avg_conf_meetings,
+      seats = ifelse(input$seats > 1, 0, 1),
+      group_meetings_ratio = input$group_meetings_ratio / 100,
+      price = input$price,
+      avg_group_meetings = input$avg_group_meetings,
+    )
+  
+  # make prediction
+  churn_pred <-
+    round(predict(super_model, newdata = new_case, type = "prob")[[1]], 4)
+  
+  cust_value <- round((1 - churn_pred) * (input$seats * input$price * 12))
+  
+  valueBox(
+      paste0("$", prettyNum(cust_value, big.mark = ",")),
+      icon = "fa-money"
+    )
+})
+```
+
+
+
+### Churn Risk
+
+```{r}
+gaugeOutput("churn_risk", width = "280px", height = "130px")
+```
+
+
+```{r, context="server"}
+output$churn_risk <- renderGauge({
+  
+  # get new case to predict
+  new_case <- new_case %>%
+    mutate(
+      `plan_name_premium-monthly` = ifelse(input$plan_name == "premium-monthly", 1, 0),
+      `plan_name_premium-yearly` = ifelse(input$plan_name == "premium-yearly", 1, 0),
+      `plan_name_pro-monthly` = ifelse(input$plan_name == "pro-monthly", 1, 0),
+      `plan_name_pro-yearly` = ifelse(input$plan_name == "pro-yearly", 1, 0),
+      usage_rate = input$usage_rate / 30,
+      avg_meetings = input$avg_meetings,
+      avg_conf_meetings = input$avg_conf_meetings,
+      seats = ifelse(input$seats > 1, 0, 1),
+      group_meetings_ratio = input$group_meetings_ratio / 100,
+      price = input$price,
+      avg_group_meetings = input$avg_group_meetings,
+    )
+  
+  # make prediction
+  churn_pred <-
+    round(predict(super_model, newdata = new_case, type = "prob")[[1]], 4)
+  
+  # data viz gauge
+  gauge(
+    churn_pred * 100,
+    min = 0, 
+    max = 100,
+    gaugeSectors(
+      success = c(0,15),
+      warning = c(16, 40),
+      danger = c(41,100)
+    ),
+    symbol = "%"
+  )
+})
+```
+
+
+
+### Predicted Churn Rate Vs. Actual Churn Rate
+
+```{r}
+## create deciles
+decile_results <- new_data %>%
+  mutate(
+    Quantile = ntile(prob, 6),
+    Churn_num = case_when(
+      Churn == "Churn" ~ 1,
+      Churn == "Active" ~ 0
+    ),
+    Pred_num = case_when(
+      pred == "Churn" ~ 1,
+      pred == "Active" ~ 0
+    )
+  ) %>%
+  group_by(Quantile) %>%
+  summarise(
+    Actual = mean(Churn_num),
+    Predicted = mean(prob),
+    Sample_Size = n(),
+  ) %>%
+  arrange(desc(Quantile))
+
+## Plot Deciles
+decile_results %>%
+  ggplot() +
+  geom_point(aes(x = factor(Quantile), y = Actual), col = "blue") +
+  geom_line(aes(x = Quantile, y = Actual, color = "blue")) +
+  geom_point(aes(x = factor(Quantile), y = Predicted), col = "red") +
+  geom_line(aes(x = Quantile, y = Predicted, color = "red")) +
+  scale_colour_manual(name = '',
+                      values = c('blue' = 'blue', 'red' = 'red'), labels = c('Actual','Predicted')) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  labs(title = "Calendly Churn Rate by Decile",
+       subtitle = "Actual Rates vs. Predicted Rates",
+       y = "Churn Rate",
+       x = "Decile") +
+  theme_bw() 
+```
+
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+
+### Customer Profile
+
+```{r}
+htmlOutput("customer_profile")
+```
+
+```{r, context="server"}
+output$customer_profile <- renderUI({
+  
+  # get new case to predict
+  new_case <- new_case %>%
+    mutate(
+      `plan_name_premium-monthly` = ifelse(input$plan_name == "premium-monthly", 1, 0),
+      `plan_name_premium-yearly` = ifelse(input$plan_name == "premium-yearly", 1, 0),
+      `plan_name_pro-monthly` = ifelse(input$plan_name == "pro-monthly", 1, 0),
+      `plan_name_pro-yearly` = ifelse(input$plan_name == "pro-yearly", 1, 0),
+      usage_rate = input$usage_rate / 30,
+      avg_meetings = input$avg_meetings,
+      avg_conf_meetings = input$avg_conf_meetings,
+      seats = ifelse(input$seats > 1, 0, 1),
+      group_meetings_ratio = input$group_meetings_ratio / 100,
+      price = input$price,
+      avg_group_meetings = input$avg_group_meetings,
+    )
+  
+  # make prediction
+  churn_pred <-
+    round(predict(super_model, newdata = new_case, type = "prob")[[1]], 4)
+  
+  
+  HTML(
+    glue::glue(
+      "
+      <li>Seats: 
+      {input$seats}
+      <li>Plan:
+      {input$plan_name}
+      <li>Price per Seat: 
+      {input$price}
+      <li>Number of Days used in the first Month: 
+      {input$usage_rate}
+      <li>Average Meetings per Day: 
+      {input$avg_meetings}
+      <br>
+      <br>
+      <b/>Customer Value: {scales::dollar((1 - churn_pred) * (input$seats * input$price * 12))}</b>
+      "
+    )
+  )
+})
+```
+
+
+
+
+
+### Model Evaluation Metrics {data-height=1050}
+
+```{r}
+## Confusion Matrix
+confusionMatrix(new_data$pred, new_data$Churn, mode = "prec_recall")
+```
+
+
+Correlation Analysis {data-icon="fa-check-double"}
+=============================================================================
+
+```{r}
+plotOutput('corr_analysis')
+```
+
+```{r, context="server"}
+output$corr_analysis <- renderPlot({
+
+  withProgress(message = 'Generating correlations plot', value = 0.6, {
+    
+    # a data frame with all the annotation info
+    good_bad_anno <- data.frame(
+      x = c(-0.18, 0.18),
+      y = c(9.5, 9.5),
+      label = c("Good", "Bad")
+    )
+    
+    # Correlation visualization
+    corrr_analysis %>%
+      ggplot(aes(x = Churn, y = fct_reorder(feature, desc(Churn)))) +
+      geom_point() +
+      # Positive Correlations - Contribute to churn
+      geom_segment(aes(xend = 0, yend = feature),
+                   color = palette_light()[[2]],
+                   data = corrr_analysis %>% filter(Churn > 0)) +
+      geom_point(color = palette_light()[[2]],
+                 data = corrr_analysis %>% filter(Churn > 0)) +
+      # Negative Correlations - Prevent churn
+      geom_segment(aes(xend = 0, yend = feature),
+                   color = palette_light()[[1]],
+                   data = corrr_analysis %>% filter(Churn < 0)) +
+      geom_point(color = palette_light()[[1]],
+                 data = corrr_analysis %>% filter(Churn < 0)) +
+      # Vertical lines
+      geom_vline(
+        xintercept = 0,
+        color = palette_light()[[5]],
+        size = 1,
+        linetype = 2
+      ) +
+      geom_vline(
+        xintercept = -0.25,
+        color = palette_light()[[5]],
+        size = 1,
+        linetype = 2
+      ) +
+      geom_vline(
+        xintercept = 0.25,
+        color = palette_light()[[5]],
+        size = 1,
+        linetype = 2
+      ) +
+      # Add arrow
+      annotate(
+        "segment",
+        x = 0,
+        xend = 0.15,
+        y = 9.5,
+        yend = 9.5,
+        colour = "red",
+        size = 1,
+        alpha = 1,
+        arrow = arrow()
+      ) +
+      # Add arrow
+      annotate(
+        "segment",
+        x = 0,
+        xend = -0.15,
+        y = 9.5,
+        yend = 9.5,
+        colour = "darkgreen",
+        size = 1,
+        alpha = 1,
+        arrow = arrow()
+      ) +
+      geom_text(
+        data = good_bad_anno,
+        aes(x = x, y = y, label = label),
+        color = c("darkgreen", "red"),
+        size = 5,
+        fontface = "bold"
+      ) +
+      # Aesthetics
+      theme_tq() +
+      labs(
+        title = "Churn Correlation Analysis",
+        subtitle = paste(
+          "Negative Correlations (prevent churn),",
+          "Positive Correlations (contribute to churn)"
+        ),
+        y = "Feature Importance"
+      ) +
+      theme(
+        plot.title = element_text(size = 22, face = "bold"),
+        plot.subtitle = element_text(size = 14, face = "italic"),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 14),
+      )
+    })
+})
+```
+
+
+
+
+
+Improvements {data-icon="fa-signal"}
+===
+
+-----------------------------------------------------------------------
+
+### Improvements {data-height=1050}
+
+#### Model Improvements
+
+As the model stands right now, I would not recommend using the predictions. There are many improvements that could be made for this model given more time and access:
+
+- **More Data** - The number one thing would be to include more data. It is very difficult (but not impossible) to build a predictive model with only 300 total organizations. If we are able to expand the dataset the model will be able to learn more. 
+- **Sampling**  - Because this classification problem is an imbalanced classifier (only 10% Churn), testing out various sampling techniques. 
+  - Down Sampling
+  - Up Sampling
+  - Class Weights
+  - SMOTE Sampling
+- **Algorithms** - There are many more predictive algorithms that could be tested out to determine which one performs the best.
+  - Boosted Models
+  - Neural Networks
+  - Random Forest
+  - Linear Models
+- **Feature Engineering ** - I could have spent more time testing out more features to input in the model and/or various timeframes for the variables that I did use. I just provided a quick and dirty feature engineering portion to get a decent working model.
+
+#### Additional Data
+
+- Customer Profile  
+  - Number of Employees
+  - Revenue
+  - Industry
+  - Geography
+  - Years in business
+- Account Information
+  - Payment Method
+  - Title of account owner
+
+
+
+#### Understanding Customer Churn
+  
+- Why do customers Churn?  
+  - **Involuntary** - Expired credit cards, system failure, email/address change and missed reminders/forget, etc. 
+  - **Voluntary** - Too expensive, didn't enjoy the product, don't need the service anymore, switching to competitor, etc.
+- What are some common pain points for customers? 
+- At what point do customers usually churn?
+
+
+### Business Useage
+
+#### Business Application
+
+Profitability of a subscription based company is directly tied to the churn rate of thier customers. A churn model can be extremely beneficial for a business in several different ways:
+
+- Assign expected customer values to each organization.
+- Engage/reach out to organizations with a high likelihood to churn before they actually Churn.
+- Avoid targeting high likelihood to churn organizations with up-sale/cross-sale marketing campaigns.
+- Target low likelihood to churn organizations with up-sale/cross-sale marketing campaigns.
+
