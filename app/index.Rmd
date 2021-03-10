@@ -18,13 +18,13 @@ library("tidyverse")
 library("caret")
 
 # load data
-org_subscription_events <- read_csv("data/org subscription events.csv")
-product_usage <- read_csv("data/product usage.csv")
-new_data <- readRDS("data/new_data.rds")
-corrr_analysis <- readRDS("data/corrr_analysis.rds")
+org_subscription_events <- read_csv(here("./data/org subscription events.csv"))
+product_usage <- read_csv(here("./data/product usage.csv"))
+new_data <- readRDS(here("./data/new_data.rds"))
+corrr_analysis <- readRDS(here("./data/corrr_analysis.rds"))
 
 # load model
-super_model <- readRDS("models/fit_glm.rds")
+super_model <- readRDS(here("./models/fit_glm.rds"))
 
 
 ## new case
@@ -119,7 +119,7 @@ numericInput(
 
 **Jason Lee - Manager, Data Science**
 
-![](images/calendly.png){width=64} [Calendly](https://calendly.com)
+![](../images/calendly.png){width=64} [Calendly](https://calendly.com)
 
 
 
