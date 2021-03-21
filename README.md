@@ -16,5 +16,5 @@ cd Churn_model
 open Churn_model.Rproj
 ```
 
-Open `index.Rmd`  
+Open `app/index.Rmd`  
 Run Document 
